@@ -8,6 +8,7 @@ import { Sound } from './audio.js';
 import { Input } from './input.js';
 import { HUD, TIERS, tierOf } from './hud.js';
 import { makeTextures } from './textures.js';
+import { drawShareCard, captureSnapshot } from './share.js';
 import { clamp, damp, fmtTime, fmtNum, hashStr, todayKey, store, hsv, isTouchDevice } from './util.js';
 
 const BODY_H = 1.7, SLIDE_H = 0.8, SLIDE_T = 0.6, FLIP_T = 0.42;
@@ -75,8 +76,9 @@ class App {
       left: () => this.act('left'), right: () => this.act('right'),
       jump: () => this.act('jump'), slide: () => this.act('slide'),
       pause: () => this.togglePause(), camera: () => this.toggleCam(),
-      restart: () => { if (this.state === 'result' || this.state === 'paused') this.startRun(); },
-      enter: () => { if (this.state === 'title') this.startRun(); else if (this.state === 'result') this.startRun(); },
+      escape: () => { if (!$('sharePanel').classList.contains('hidden')) { this.closeShare(); return true; } return false; },
+      restart: () => { if ((this.state === 'result' && $('sharePanel').classList.contains('hidden')) || this.state === 'paused') this.startRun(); },
+      enter: () => { if (this.state === 'title') this.startRun(); else if (this.state === 'result' && $('sharePanel').classList.contains('hidden')) this.startRun(); },
     });
 
     this.bindUI();
@@ -151,6 +153,7 @@ class App {
     this.camU = 0; this.camH = 3;
     this.sound.intensity = 0;
     this.lastPraise = 0;
+    this.snap = null;
     this.finishT = 0;
   }
 
@@ -170,7 +173,12 @@ class App {
     tap('btnSetP', () => { this.settingsFrom = 'pause'; this.syncSettingsUI(); this.showScreen('settings'); });
     tap('btnRetry', () => this.startRun());
     tap('btnTitle', () => this.toTitle());
-    tap('btnShare', () => this.share());
+    tap('btnShare', () => this.openShare());
+    tap('btnShareNative', () => this.shareNative());
+    tap('btnShareX', () => this.shareToX());
+    tap('btnShareSave', () => this.saveShareImage());
+    tap('btnShareCopy', () => this.copyShareText());
+    tap('btnShareClose', () => this.closeShare());
     tap('btnMute', () => { this.sound.setMuted(!this.sound.muted); $('btnMute').textContent = this.sound.muted ? '🔇' : '🔊'; });
 
     const seg = (name, val, fn) => {
@@ -210,6 +218,7 @@ class App {
   }
 
   toTitle() {
+    this.closeShare();
     this.sound.stopMusic();
     if (this.sound.ctx && this.sound.ctx.state === 'suspended') this.sound.resume();
     this.state = 'title';
@@ -240,6 +249,7 @@ class App {
 
   // ---------- レース開始 ----------
   startRun() {
+    this.closeShare();
     this.sound.init();
     this.sound.resume();
     this.sound.stopMusic();
@@ -857,7 +867,7 @@ class App {
       ['SCORE', fmtNum(r.score), ''],
       ['TIME BONUS', '+' + fmtNum(r.timeBonus), ''],
       ['MAX COMBO', this.maxCombo, ''],
-      ['COINS', `${this.coins} / ${this.course.counts.coin}`, ''],
+      ['COINS', `${this.coins}/${this.course.counts.coin}`, ''],
       ['PERFECT', st.perfect, ''],
       ['TRICKS', st.tricks, ''],
       ['SMASH', st.smash, ''],
@@ -894,18 +904,171 @@ class App {
     $('resNew').textContent = r.newTime && r.newTotal ? 'NEW RECORD!! タイム & スコア' : r.newTime ? 'NEW RECORD!! ベストタイム' : 'NEW RECORD!! ハイスコア';
     $('resPrev').textContent = r.prevTime ? `自己ベスト ${fmtTime(Math.min(r.prevTime, r.t))} / ${fmtNum(Math.max(r.prevTotal, r.total))}pt` : '初クリア!';
     requestAnimationFrame(anim);
+    this.prepareShare();
   }
 
-  share() {
+  // ---------- シェア ----------
+  // 専用カメラでランナーを正面から撮影 → 16:9 で切り出し → 通常カメラで描き直す（画面には出ない）
+  takePhoto() {
+    const c = this.course, p = this.p, canvas = this.renderer.domElement;
+    // 切り出し幅が 1200px 程度になるよう一時的に解像度を上げる
+    const prevPR = this.renderer.getPixelRatio();
+    const cssW = innerWidth, cssH = innerHeight;
+    const cropCssW = cssW / cssH > 16 / 9 ? (cssH * 16) / 9 : cssW;
+    const pr = Math.min(3, Math.max(prevPR, 1200 / cropCssW));
+    if (pr !== prevPR) this.renderer.setPixelRatio(pr);
+    const W = canvas.width, H = canvas.height;
+    let cw, ch;
+    if (W / H > 16 / 9) { ch = H; cw = Math.round((H * 16) / 9); } else { cw = W; ch = Math.round((W * 9) / 16); }
+    const cam = this.photoCam || (this.photoCam = new THREE.PerspectiveCamera(46, 1, 0.1, 2000));
+    const fovCrop = 46;
+    cam.aspect = W / H;
+    cam.fov = (2 * Math.atan(Math.tan((fovCrop * Math.PI) / 360) * (H / ch)) * 180) / Math.PI;
+    cam.updateProjectionMatrix();
+    // ランナーの正面やや横から。ランナーが画像の中央やや左（ランク表示と重ならない位置）に来るように
+    c.toWorld(p.s + 5.2, p.u + 1.7, p.y + 1.45, cam.position);
+    c.toWorld(p.s - 0.5, p.u - 0.35, p.y + 1.2, _v);
+    cam.lookAt(_v);
+    const wasVisible = this.runner.root.visible;
+    this.runner.root.visible = true;
+    const prevScale = this.fx.uniforms.scale.value;
+    this.fx.uniforms.scale.value = H / (2 * Math.tan((cam.fov * Math.PI) / 360));
+    this.renderer.render(this.scene, cam);
+    this.snap = captureSnapshot(canvas, { x: Math.round((W - cw) / 2), y: Math.round((H - ch) / 2), w: cw, h: ch });
+    this.fx.uniforms.scale.value = prevScale;
+    this.runner.root.visible = wasVisible;
+    if (pr !== prevPR) this.renderer.setPixelRatio(prevPR);
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  shareURL() {
+    return location.origin + location.pathname.replace(/index\.html$/, '');
+  }
+
+  shareText() {
+    const r = this.result;
+    const c = COURSES[this.courseKey];
+    const d = todayKey();
+    const lines = [
+      `天空パルクールで【${r.rank}ランク】${r.newTime || r.newTotal ? 'NEW RECORD!!' : ''}🔥`,
+      `⏱ タイム ${fmtTime(r.t)}`,
+      `🏆 スコア ${fmtNum(r.total)}pt`,
+      `💥 最大${this.maxCombo}コンボ`,
+      c.daily ? `📅 デイリーコース ${+d.slice(4, 6)}/${+d.slice(6)}` : `🏔 ${c.name}`,
+      '',
+      '#天空パルクール #ブラウザゲーム',
+      this.shareURL(),
+    ];
+    return lines.join('\n');
+  }
+
+  // リザルト表示時にシェア画像を先に作っておく（シェアはタップ直後に同期で呼ぶ必要があるため）
+  prepareShare() {
     const r = this.result;
     if (!r) return;
-    const url = location.href.split('#')[0].split('?')[0];
-    const text = `天空パルクールで【${r.rank}ランク】!\n⏱ ${fmtTime(r.t)} / 🏆 ${fmtNum(r.total)}pt / 🔥 最大${this.maxCombo}コンボ\n${COURSES[this.courseKey].daily ? 'デイリーコース ' + todayKey() + '\n' : ''}#天空パルクール`;
-    if (navigator.share && this.touch) {
-      navigator.share({ title: '天空パルクール', text, url }).catch(() => {});
-    } else {
-      window.open(`https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`, '_blank', 'noopener');
-    }
+    const c = COURSES[this.courseKey];
+    const d = todayKey();
+    const card = drawShareCard({
+      snap: this.snap, rank: r.rank, time: r.t, total: r.total, maxCombo: this.maxCombo,
+      coins: this.coins, coinTotal: this.course.counts.coin, perfect: this.stats.perfect,
+      courseLabel: c.daily ? `デイリーコース ${+d.slice(4, 6)}/${+d.slice(6)}` : c.name,
+      isNew: r.newTime && r.newTotal ? 'NEW RECORD!!' : r.newTime ? 'NEW BEST TIME!!' : r.newTotal ? 'NEW HIGH SCORE!!' : '',
+      url: this.shareURL(),
+    });
+    this.shareCanvas = card;
+    this.shareFile = null;
+    if (this.shareBlobURL) URL.revokeObjectURL(this.shareBlobURL);
+    this.shareBlobURL = null;
+    const token = (this.shareToken = (this.shareToken || 0) + 1);
+    this.sharePending = new Promise((resolve) => {
+      card.toBlob((blob) => {
+        if (token !== this.shareToken || !blob) return resolve();
+        this.shareFile = new File([blob], `skyrush-${r.rank}-${Date.now()}.png`, { type: 'image/png' });
+        this.shareBlobURL = URL.createObjectURL(blob);
+        resolve();
+      }, 'image/png');
+    });
+  }
+
+  canShareFile() {
+    try {
+      return !!(this.shareFile && navigator.canShare && navigator.canShare({ files: [this.shareFile], text: 'x' }));
+    } catch (e) { return false; }
+  }
+
+  async openShare() {
+    if (!this.result) return;
+    if (!this.shareCanvas) this.prepareShare();
+    $('shareText').value = this.shareText();
+    $('shareImg').src = this.shareCanvas.toDataURL('image/png');
+    this.setShareNote('');
+    $('sharePanel').classList.remove('hidden');
+    await this.sharePending;
+    const native = this.canShareFile();
+    $('btnShareNative').classList.toggle('hidden', !native);
+    $('btnShareX').classList.toggle('big', !native);
+    $('shareHint').textContent = native
+      ? '「画像つきでシェア」→ X を選ぶと、画像と文章をまとめて投稿できます'
+      : '「X に投稿」で画像がコピーされます。投稿画面で貼り付け（Ctrl+V / ⌘V）してね';
+  }
+
+  closeShare() { $('sharePanel').classList.add('hidden'); }
+
+  setShareNote(t) {
+    const n = $('shareNote');
+    n.textContent = t;
+    n.classList.toggle('show', !!t);
+  }
+
+  shareNative() {
+    const text = $('shareText').value;
+    if (!this.canShareFile()) { this.shareToX(); return; }
+    navigator.share({ files: [this.shareFile], text }).then(() => this.setShareNote('シェアしました!')).catch((e) => {
+      if (e && e.name === 'AbortError') return;
+      this.setShareNote('シェアに失敗しました。「X に投稿」か「画像を保存」を試してね');
+    });
+  }
+
+  shareToX() {
+    const text = $('shareText').value;
+    let copied = false;
+    // 画像をクリップボードへ（PC なら X の投稿画面で貼り付けできる）
+    try {
+      if (this.shareFile && navigator.clipboard && window.ClipboardItem) {
+        navigator.clipboard.write([new ClipboardItem({ 'image/png': this.shareFile })]).then(
+          () => this.setShareNote('画像をコピーしました → X の投稿画面で貼り付け（Ctrl+V / ⌘V）'),
+          () => this.setShareNote('画像は「画像を保存」してから投稿に添付してね'),
+        );
+        copied = true;
+      }
+    } catch (e) { copied = false; }
+    if (!copied) this.setShareNote('画像は「画像を保存」してから投稿に添付してね');
+    window.open(`https://x.com/intent/post?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+  }
+
+  saveShareImage() {
+    const url = this.shareBlobURL || (this.shareCanvas && this.shareCanvas.toDataURL('image/png'));
+    if (!url) return;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = this.shareFile ? this.shareFile.name : 'skyrush-score.png';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    this.setShareNote(this.touch ? '保存できない場合は画像を長押しして保存してね' : '画像を保存しました');
+  }
+
+  copyShareText() {
+    const text = $('shareText').value;
+    const done = () => this.setShareNote('文章をコピーしました');
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => this.fallbackCopy(text, done));
+    else this.fallbackCopy(text, done);
+  }
+
+  fallbackCopy(text, done) {
+    const ta = $('shareText');
+    ta.focus(); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { this.setShareNote('文章を選択してコピーしてね'); }
   }
 
   // ---------- ループ ----------
@@ -1021,6 +1184,10 @@ class App {
     this.lines.draw(rdt);
 
     this.renderer.render(this.scene, this.camera);
+    // ゴールの記念写真をシェア画像用に撮る（減速して歓声ポーズになったら）
+    if (this.state === 'finish' && !this.snap && (this.p.speed < 1.5 || this.finishT > 2.6)) {
+      try { this.takePhoto(); } catch (e) { console.warn(e); this.snap = null; }
+    }
   }
 
   ambientFX(dt) {

@@ -5,7 +5,10 @@ export class Input {
     this.enabled = true;
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
+      const tg = e.target;
+      if (tg && (tg.tagName === 'TEXTAREA' || tg.tagName === 'INPUT')) return; // 文章入力中は無視
       const k = e.key;
+      if (k === 'Escape' && h.escape && h.escape()) return;
       let used = true;
       if (k === 'ArrowLeft' || k === 'a' || k === 'A') this.fire('left');
       else if (k === 'ArrowRight' || k === 'd' || k === 'D') this.fire('right');
@@ -20,7 +23,7 @@ export class Input {
     });
 
     let start = null;
-    const isUI = (t) => t && t.closest && t.closest('button, .screen, a, input, label, select');
+    const isUI = (t) => t && t.closest && t.closest('button, .screen, a, input, textarea, label, select');
     el.addEventListener('pointerdown', (e) => {
       if (isUI(e.target)) return;
       start = { x: e.clientX, y: e.clientY, t: performance.now(), fired: false, id: e.pointerId };

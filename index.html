@@ -152,9 +152,30 @@
       <div id="resPrev"></div>
       <div class="res-btns">
         <button id="btnRetry" class="btn big">もう一回!</button>
-        <button id="btnShare" class="btn share">𝕏 でシェア</button>
+        <button id="btnShare" class="btn sharebtn">スコアをシェア</button>
         <button id="btnTitle" class="btn small">タイトル</button>
       </div>
+    </div>
+  </div>
+
+  <!-- シェア -->
+  <div id="sharePanel" class="screen hidden">
+    <div class="card share-card">
+      <h2>スコアをシェア</h2>
+      <img id="shareImg" alt="シェア用のスコア画像">
+      <label class="share-label" for="shareText">投稿文（編集できます）</label>
+      <textarea id="shareText" rows="6" spellcheck="false"></textarea>
+      <div class="share-btns">
+        <button id="btnShareNative" class="btn big hidden">画像つきでシェア</button>
+        <button id="btnShareX" class="btn share">𝕏 に投稿</button>
+        <div class="share-row">
+          <button id="btnShareSave" class="btn small">画像を保存</button>
+          <button id="btnShareCopy" class="btn small">文章をコピー</button>
+        </div>
+      </div>
+      <p id="shareHint" class="note"></p>
+      <p id="shareNote"></p>
+      <button id="btnShareClose" class="btn small">閉じる</button>
     </div>
   </div>
 

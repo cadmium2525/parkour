@@ -34,7 +34,7 @@ class App {
     this.settings = Object.assign({ cam: 'third', fx: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 2, music: 0.55, sfx: 0.8, ghost: true }, store.get('skyrush.settings', {}));
     this.touch = isTouchDevice();
     const canvas = $('gl');
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !this.touch, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.pixelRatio = Math.min(window.devicePixelRatio || 1, this.touch ? 1.6 : 2);
     this.renderer.setPixelRatio(this.pixelRatio);
     this.scene = new THREE.Scene();

@@ -9,13 +9,16 @@ const _f = {};
 
 // パス空間 (s, u, h) で頂点を積み上げるジオメトリビルダー
 class GeoBuilder {
-  constructor(course) {
+  // absH=true のとき h は「路面からの高さ」ではなく絶対高さ（階段の踏面用）
+  constructor(course, absH = false) {
     this.c = course;
+    this.absH = absH;
     this.pos = []; this.col = []; this.uv = []; this.idx = []; this.n = 0;
   }
   v(s, u, h, color, tu = 0, tv = 0, hFn) {
     const p = this.c.toWorld(s, u, h, _v);
     if (hFn) p.y = hFn(s) + h;
+    else if (this.absH) p.y = h;
     this.pos.push(p.x, p.y, p.z);
     this.col.push(color.r, color.g, color.b);
     this.uv.push(tu, tv);
@@ -244,15 +247,15 @@ export class World {
     const CH = 40;
     const chunks = new Map();
     const rnd = this.rnd;
-    const tread = new THREE.Color(), nose = C(0x3e4246), riser = C(0x6a6f73), tile = new THREE.Color();
+    const tread = new THREE.Color(), nose = C(0x5c6165), riser = C(0x6a6f73), tile = new THREE.Color();
     for (let i = 0; i < steps.length; i++) {
       const st = steps[i];
       const key = Math.floor(st.a / CH);
-      if (!chunks.has(key)) chunks.set(key, new GeoBuilder(c));
+      if (!chunks.has(key)) chunks.set(key, new GeoBuilder(c, true));
       const g = chunks.get(key);
       const W = HALF_W + 0.05;
       if (st.stair) {
-        const k = (i % 2 ? 0.84 : 0.94) + rnd() * 0.08;
+        const k = (i % 2 ? 0.88 : 0.95) + rnd() * 0.05;
         tread.setRGB(k, k, k * 1.01);
         const nb = st.b - 0.1;
         g.quad(g.v(st.a, -W, st.h, tread, -W * 0.5, st.a * 0.5), g.v(st.a, W, st.h, tread, W * 0.5, st.a * 0.5), g.v(nb, W, st.h, tread, W * 0.5, nb * 0.5), g.v(nb, -W, st.h, tread, -W * 0.5, nb * 0.5));
